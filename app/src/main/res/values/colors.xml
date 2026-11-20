@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#FF14131C</color>
+    <color name="card">#FF1F1E2B</color>
+    <color name="primary">#FF7C5CFF</color>
+    <color name="lilac">#FFA78BFA</color>
+    <color name="blue">#FF4D8DFF</color>
+    <color name="green">#FF4CC36B</color>
+    <color name="yellow">#FFF2B72E</color>
+    <color name="text">#FFF2F0FA</color>
+</resources>
