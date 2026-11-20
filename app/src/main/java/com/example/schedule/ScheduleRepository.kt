@@ -1,6 +1,8 @@
 package com.example.schedule
 
 import android.content.Context
+import java.time.DayOfWeek
+import java.time.LocalDate
 
 class ScheduleRepository(ctx: Context) {
     private val sp = ctx.getSharedPreferences("schedule", Context.MODE_PRIVATE)
@@ -14,13 +16,23 @@ class ScheduleRepository(ctx: Context) {
         sp.edit().putString("json", LessonJson.toJson(list)).apply()
     }
 
+    private fun weekly(
+        id: Long, dow: DayOfWeek, start: String, end: String,
+        title: String, room: String, icon: String, color: String
+    ) = Lesson(
+        id = id, title = title,
+        date = LocalDate.now().with(dow).minusWeeks(8).toString(),
+        recurrence = "WEEKLY", isAllDay = false, color = color,
+        start = start, end = end, room = room, icon = icon, emoji = ""
+    )
+
     private fun defaults() = listOf(
-        Lesson(1, 3, "08:30", "09:15", "Математика", "101", "math"),
-        Lesson(2, 3, "09:25", "10:10", "Физика", "203", "physics"),
-        Lesson(3, 3, "10:25", "11:10", "Информатика", "305", "it"),
-        Lesson(4, 3, "11:20", "12:05", "История", "110", "history"),
-        Lesson(5, 4, "08:30", "09:15", "Русский язык", "204", "lit"),
-        Lesson(6, 4, "09:25", "10:10", "Биология", "301", "bio"),
-        Lesson(7, 4, "10:25", "11:10", "Химия", "207", "chem")
+        weekly(1, DayOfWeek.WEDNESDAY, "08:30", "09:15", "Математика", "Каб. 101", "math", "#7C5CFF"),
+        weekly(2, DayOfWeek.WEDNESDAY, "09:25", "10:10", "Физика", "Каб. 203", "physics", "#4D8DFF"),
+        weekly(3, DayOfWeek.WEDNESDAY, "10:25", "11:10", "Информатика", "Каб. 305", "it", "#4CC36B"),
+        weekly(4, DayOfWeek.WEDNESDAY, "11:20", "12:05", "История", "Каб. 110", "history", "#F2B72E"),
+        weekly(5, DayOfWeek.THURSDAY, "08:30", "09:15", "Русский язык", "Каб. 204", "lit", "#F2B72E"),
+        weekly(6, DayOfWeek.THURSDAY, "09:25", "10:10", "Биология", "Каб. 301", "bio", "#4CC36B"),
+        weekly(7, DayOfWeek.THURSDAY, "10:25", "11:10", "Химия", "Каб. 207", "chem", "#4D8DFF")
     )
 }

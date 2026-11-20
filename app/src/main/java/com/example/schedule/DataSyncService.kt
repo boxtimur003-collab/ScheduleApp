@@ -6,13 +6,20 @@ import kotlinx.coroutines.tasks.await
 
 object DataSyncService {
     const val PATH = "/schedule"
+    private const val MAX_BYTES = 100_000
 
-    /** Возвращает число часов, которым ушло сообщение, или -1 при ошибке. */
     suspend fun send(ctx: Context, json: String): Int = try {
-        val nodes = Wearable.getNodeClient(ctx).connectedNodes.await()
-        nodes.forEach {
-            Wearable.getMessageClient(ctx).sendMessage(it.id, PATH, json.toByteArray()).await()
+        val bytes = json.toByteArray(Charsets.UTF_8)
+        if (bytes.size > MAX_BYTES) {
+            -2
+        } else {
+            val nodes = Wearable.getNodeClient(ctx).connectedNodes.await()
+            nodes.forEach {
+                Wearable.getMessageClient(ctx).sendMessage(it.id, PATH, bytes).await()
+            }
+            nodes.size
         }
-        nodes.size
-    } catch (e: Exception) { -1 }
+    } catch (e: Exception) {
+        -1
+    }
 }

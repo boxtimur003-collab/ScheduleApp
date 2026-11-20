@@ -6,7 +6,10 @@ import com.google.android.gms.wearable.WearableListenerService
 class DataSyncService : WearableListenerService() {
     override fun onMessageReceived(event: MessageEvent) {
         if (event.path == "/schedule") {
-            ScheduleRepository.update(applicationContext, String(event.data))
+            try {
+                ScheduleRepository.update(applicationContext, String(event.data, Charsets.UTF_8))
+            } catch (e: Exception) {
+            }
         }
     }
 }

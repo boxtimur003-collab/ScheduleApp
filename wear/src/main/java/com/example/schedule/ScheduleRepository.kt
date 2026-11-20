@@ -16,6 +16,7 @@ object ScheduleRepository {
     }
 
     fun update(ctx: Context, json: String) {
+        if (!json.trim().startsWith("[")) return
         prefs(ctx).edit().putString("json", json).apply()
         _lessons.value = LessonJson.fromJson(json)
     }
