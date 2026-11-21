@@ -23,16 +23,17 @@ class ScheduleRepository(ctx: Context) {
         id = id, title = title,
         date = LocalDate.now().with(dow).minusWeeks(8).toString(),
         recurrence = "WEEKLY", isAllDay = false, color = color,
-        start = start, end = end, room = room, icon = icon, emoji = ""
+        start = start, end = end, room = room, icon = icon, emoji = "",
+        exceptions = emptyList()
     )
 
     private fun defaults() = listOf(
-        weekly(1, DayOfWeek.WEDNESDAY, "08:30", "09:15", "Математика", "Каб. 101", "math", "#7C5CFF"),
-        weekly(2, DayOfWeek.WEDNESDAY, "09:25", "10:10", "Физика", "Каб. 203", "physics", "#4D8DFF"),
-        weekly(3, DayOfWeek.WEDNESDAY, "10:25", "11:10", "Информатика", "Каб. 305", "it", "#4CC36B"),
-        weekly(4, DayOfWeek.WEDNESDAY, "11:20", "12:05", "История", "Каб. 110", "history", "#F2B72E"),
-        weekly(5, DayOfWeek.THURSDAY, "08:30", "09:15", "Русский язык", "Каб. 204", "lit", "#F2B72E"),
-        weekly(6, DayOfWeek.THURSDAY, "09:25", "10:10", "Биология", "Каб. 301", "bio", "#4CC36B"),
-        weekly(7, DayOfWeek.THURSDAY, "10:25", "11:10", "Химия", "Каб. 207", "chem", "#4D8DFF")
+        weekly(1, DayOfWeek.WEDNESDAY, "08:30", "09:15", "Математика", "Каб. 101", "math", "#8E24AA"),
+        weekly(2, DayOfWeek.WEDNESDAY, "09:25", "10:10", "Физика", "Каб. 203", "physics", "#1A73E8"),
+        weekly(3, DayOfWeek.WEDNESDAY, "10:25", "11:10", "Информатика", "Каб. 305", "it", "#0B8043"),
+        weekly(4, DayOfWeek.WEDNESDAY, "11:20", "12:05", "История", "Каб. 110", "history", "#F6BF26"),
+        weekly(5, DayOfWeek.THURSDAY, "08:30", "09:15", "Русский язык", "Каб. 204", "lit", "#F4511E"),
+        weekly(6, DayOfWeek.THURSDAY, "09:25", "10:10", "Биология", "Каб. 301", "bio", "#0B8043"),
+        weekly(7, DayOfWeek.THURSDAY, "10:25", "11:10", "Химия", "Каб. 207", "chem", "#039BE5")
     )
 }

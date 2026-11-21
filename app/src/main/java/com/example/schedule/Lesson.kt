@@ -8,9 +8,9 @@ import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
 /**
- * date: "2026-11-20" (для разовых; для повторяющихся - дата первого вхождения)
+ * date: "2026-11-20" (разовое - дата события, повторяющееся - дата первого вхождения)
  * recurrence: NONE | DAILY | WEEKLY | MONTHLY | YEARLY
- * color: "#RRGGBB"
+ * exceptions: даты "yyyy-MM-dd", в которые повторяющееся событие НЕ показывается
  */
 data class Lesson(
     val id: Long,
@@ -18,17 +18,18 @@ data class Lesson(
     val date: String,
     val recurrence: String = "NONE",
     val isAllDay: Boolean = false,
-    val color: String = "#7C5CFF",
+    val color: String = "#1A73E8",
     val start: String = "08:30",
     val end: String = "09:15",
     val room: String = "",
     val icon: String = "other",
-    val emoji: String = ""
+    val emoji: String = "",
+    val exceptions: List<String> = emptyList()
 )
 
 val PALETTE = listOf(
-    "#7C5CFF", "#4D8DFF", "#4CC36B", "#F2B72E",
-    "#FF6B6B", "#FF8A4C", "#E85DBB", "#9B98AD"
+    "#1A73E8", "#0B8043", "#D50000", "#F4511E",
+    "#F6BF26", "#8E24AA", "#039BE5", "#616161"
 )
 
 val RECURRENCES = listOf(
@@ -52,12 +53,19 @@ fun recurrenceStatus(r: String): String = when (r) {
 fun parseColor(hex: String): Color = try {
     Color(android.graphics.Color.parseColor(hex))
 } catch (e: Exception) {
-    Color(0xFF7C5CFF)
+    Color(0xFF1A73E8)
+}
+
+fun parseDate(s: String): LocalDate = try {
+    LocalDate.parse(s)
+} catch (e: Exception) {
+    LocalDate.now()
 }
 
 fun Lesson.timeLabel(): String = if (isAllDay) "Весь день" else "$start – $end"
 
 fun Lesson.occursOn(d: LocalDate): Boolean {
+    if (exceptions.isNotEmpty() && exceptions.contains(d.toString())) return false
     val base = try { LocalDate.parse(date) } catch (e: Exception) { return false }
     if (d.isBefore(base)) return false
     return when (recurrence) {
@@ -86,6 +94,7 @@ object LessonJson {
                     .put("room", it.room)
                     .put("icon", it.icon)
                     .put("emoji", it.emoji)
+                    .put("exceptions", JSONArray(it.exceptions))
             )
         }
         return arr.toString()
@@ -108,18 +117,21 @@ object LessonJson {
             date = LocalDate.now().with(DayOfWeek.of(day)).minusWeeks(8).toString()
             rec = "WEEKLY"
         }
+        val ex = o.optJSONArray("exceptions")
+        val exceptions = if (ex == null) emptyList() else (0 until ex.length()).map { ex.getString(it) }
         return Lesson(
             id = o.getLong("id"),
             title = o.optString("title", o.optString("subject", "")),
             date = date,
             recurrence = rec,
             isAllDay = o.optBoolean("isAllDay", false),
-            color = o.optString("color", "#7C5CFF"),
+            color = o.optString("color", "#1A73E8"),
             start = o.optString("start", "08:30"),
             end = o.optString("end", "09:15"),
             room = o.optString("room", ""),
             icon = o.optString("icon", "other"),
-            emoji = o.optString("emoji", "")
+            emoji = o.optString("emoji", ""),
+            exceptions = exceptions
         )
     }
 }

@@ -9,6 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -20,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -29,11 +31,13 @@ import androidx.wear.compose.foundation.lazy.items
 import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
+import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 private const val RANGE = 30
+private val RU: Locale = Locale("ru")
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -47,31 +51,95 @@ class MainActivity : ComponentActivity() {
 fun WearApp() {
     val lessons by ScheduleRepository.lessons.collectAsState()
     var detail by remember { mutableStateOf<Lesson?>(null) }
+    var drawer by remember { mutableStateOf(false) }
     val today = remember { LocalDate.now() }
-    val pager = rememberPagerState(initialPage = RANGE) { RANGE * 2 + 1 }
-    BackHandler(enabled = detail != null) { detail = null }
+    val pager = rememberPagerState(initialPage = RANGE) { RANGE * 2 + 1 }   // ±30 дней
+    val scope = rememberCoroutineScope()
+
+    BackHandler(enabled = detail != null || drawer) {
+        if (drawer) drawer = false else detail = null
+    }
 
     MaterialTheme {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             val d = detail
             if (d == null) {
                 HorizontalPager(state = pager) { page ->
-                    DayPage(today.plusDays((page - RANGE).toLong()), lessons) { detail = it }
+                    DayPage(
+                        today.plusDays((page - RANGE).toLong()), lessons,
+                        onOpen = { detail = it }, onTitle = { drawer = true }
+                    )
                 }
+                // левый край: свайп слева направо открывает панель выбора даты
+                Box(
+                    Modifier.align(Alignment.CenterStart).fillMaxHeight().width(24.dp)
+                        .pointerInput(Unit) {
+                            var total = 0f
+                            detectHorizontalDragGestures(
+                                onDragStart = { total = 0f },
+                                onDragEnd = { if (total > 40f) drawer = true },
+                                onDragCancel = { total = 0f },
+                                onHorizontalDrag = { _, dx -> total += dx }
+                            )
+                        }
+                )
             } else {
                 DetailScreen(d) { detail = null }
+            }
+            if (drawer && d == null) {
+                DatesDrawer(today, pager.currentPage - RANGE) { i ->
+                    drawer = false
+                    scope.launch { pager.animateScrollToPage(RANGE + i) }
+                }
             }
         }
     }
 }
 
 @Composable
-fun DayPage(date: LocalDate, all: List<Lesson>, onOpen: (Lesson) -> Unit) {
+fun DatesDrawer(today: LocalDate, current: Int, onPick: (Int) -> Unit) {
+    val fmt = remember { DateTimeFormatter.ofPattern("EEE, d MMM", RU) }
+    Box(
+        Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.96f)).pointerInput(Unit) {}
+    ) {
+        ScalingLazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(top = 36.dp, bottom = 36.dp, start = 16.dp, end = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            item {
+                Text(
+                    "Выбор даты", color = Pal.Dim, fontSize = 13.sp,
+                    textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()
+                )
+            }
+            items((0..6).toList()) { i ->
+                val d = today.plusDays(i.toLong())
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                        .background(if (i == current) Pal.Purple else Pal.Card)
+                        .clickable { onPick(i) }
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        d.format(fmt), color = Pal.Text, fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f)
+                    )
+                    if (i == 0) Text("сегодня", color = Pal.Dim, fontSize = 11.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun DayPage(date: LocalDate, all: List<Lesson>, onOpen: (Lesson) -> Unit, onTitle: () -> Unit) {
     val day = remember(all, date) {
         all.filter { it.occursOn(date) }
             .sortedWith(compareByDescending<Lesson> { it.isAllDay }.thenBy { it.start })
     }
-    val title = date.format(DateTimeFormatter.ofPattern("EEE, d MMM", Locale("ru")))
+    val title = date.format(DateTimeFormatter.ofPattern("EEE, d MMM", RU))
     Box(Modifier.fillMaxSize()) {
         if (day.isEmpty()) {
             Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -88,7 +156,7 @@ fun DayPage(date: LocalDate, all: List<Lesson>, onOpen: (Lesson) -> Unit) {
         }
         Text(
             "‹   $title   ›", color = Pal.Text, fontSize = 14.sp, fontWeight = FontWeight.Medium,
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = 20.dp)
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 20.dp).clickable(onClick = onTitle)
         )
     }
 }
