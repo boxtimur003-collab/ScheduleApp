@@ -7,7 +7,9 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -46,6 +48,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -81,6 +84,26 @@ val EMOJIS = listOf(
     "📚", "🧮", "🔬", "💻", "🎨", "🎵", "⚽", "🌍",
     "📝", "🧪", "🏛️", "🧬", "🗣️", "🎭", "⏰", "⭐"
 )
+
+// ======================= РАСШИРЕННАЯ ПАЛИТРА (по 16 цветов) =======================
+val PALETTE_BRIGHT = listOf(
+    "#D50000", "#F4511E", "#FB8C00", "#F6BF26", "#C0CA33", "#0B8043", "#00897B", "#039BE5",
+    "#1A73E8", "#3F51B5", "#7C5CFF", "#8E24AA", "#E91E63", "#FF4081", "#00BCD4", "#76FF03"
+)
+val PALETTE_PASTEL = listOf(
+    "#FFB3BA", "#FFDFBA", "#FFFFBA", "#BAFFC9", "#BAE1FF", "#D7BAFF", "#FFC8DD", "#CDB4DB",
+    "#A2D2FF", "#B5EAD7", "#E2F0CB", "#FFDAC1", "#C7CEEA", "#F8C8DC", "#B9FBC0", "#FDE4CF"
+)
+val PALETTE_DARK = listOf(
+    "#B71C1C", "#BF360C", "#E65100", "#827717", "#1B5E20", "#004D40", "#006064", "#01579B",
+    "#0D47A1", "#1A237E", "#311B92", "#4A148C", "#880E4F", "#3E2723", "#37474F", "#212121"
+)
+
+fun onColor(col: Color): Color = if (col.luminance() > 0.55f) Color.Black else Color.White
+
+private fun hmOf(s: String): Pair<Int, Int> =
+    (s.substringBefore(":").toIntOrNull() ?: 0).coerceIn(0, 23) to
+        (s.substringAfter(":").toIntOrNull() ?: 0).coerceIn(0, 59)
 
 // ======================= ТЕМА =======================
 class AppColors(
@@ -142,11 +165,14 @@ fun App(repo: ScheduleRepository) {
     val scope = rememberCoroutineScope()
     val today = remember { LocalDate.now() }
     var lessons by remember { mutableStateOf(repo.load()) }
+    var slots by remember { mutableStateOf(repo.loadSlots()) }
     var selected by remember { mutableStateOf(today) }
     var editing by remember { mutableStateOf<Lesson?>(null) }
     var editDate by remember { mutableStateOf(today) }
     var pendingSave by remember { mutableStateOf<Lesson?>(null) }
     var pendingDelete by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
 
     fun sync(list: List<Lesson>, notify: Boolean) {
         scope.launch {
@@ -168,25 +194,79 @@ fun App(repo: ScheduleRepository) {
         sync(list, true)
     }
 
+    fun persistSlots(list: List<TimeSlot>) {
+        slots = list
+        repo.saveSlots(list)
+    }
+
     LaunchedEffect(Unit) { sync(lessons, false) }
+    BackHandler(enabled = drawerState.isOpen) { scope.launch { drawerState.close() } }
+    BackHandler(enabled = showSettings && editing == null) { showSettings = false }
     BackHandler(enabled = editing != null) { editing = null }
 
     Box(Modifier.fillMaxSize()) {
-        MainScreen(
-            lessons = lessons, today = today, selected = selected,
-            onSelect = { selected = it },
-            onOpen = { l, d -> editDate = d; editing = l },
-            onNew = {
-                editDate = selected
-                editing = Lesson(id = 0L, title = "", date = selected.toString(), color = PALETTE[0])
-            },
-            onManualSync = { sync(lessons, true) }
-        )
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            gesturesEnabled = drawerState.isOpen,
+            drawerContent = {
+                ModalDrawerSheet {
+                    Text(
+                        "Расписание", fontSize = 22.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 24.dp)
+                    )
+                    NavigationDrawerItem(
+                        label = { Text("Настройки") },
+                        icon = { Icon(Icons.Filled.Settings, null) },
+                        selected = false,
+                        onClick = {
+                            scope.launch { drawerState.close() }
+                            showSettings = true
+                        },
+                        modifier = Modifier.padding(horizontal = 12.dp)
+                    )
+                }
+            }
+        ) {
+            MainScreen(
+                lessons = lessons, today = today, selected = selected,
+                onSelect = { selected = it },
+                onOpen = { l, d -> editDate = d; editing = l },
+                onNew = {
+                    editDate = selected
+                    editing = Lesson(id = 0L, title = "", date = selected.toString(), color = PALETTE[0])
+                },
+                onManualSync = { sync(lessons, true) },
+                onMenu = { scope.launch { drawerState.open() } }
+            )
+        }
+
+        if (showSettings) {
+            SettingsScreen(
+                lessons = lessons, slots = slots,
+                onSlots = { persistSlots(it) },
+                onImport = { list, replace ->
+                    if (replace) {
+                        persist(list)
+                    } else {
+                        val used = lessons.mapTo(HashSet()) { it.id }
+                        var k = System.currentTimeMillis()
+                        val add = list.map { l ->
+                            var id = l.id
+                            while (!used.add(id)) { k++; id = k }
+                            l.copy(id = id)
+                        }
+                        persist(lessons + add)
+                    }
+                    Toast.makeText(ctx, "Импортировано событий: ${list.size}", Toast.LENGTH_SHORT).show()
+                },
+                onBack = { showSettings = false }
+            )
+        }
 
         editing?.let { orig ->
             key(orig.id) {
                 EditScreen(
-                    init = orig, initDate = editDate,
+                    init = orig, initDate = editDate, all = lessons, slots = slots,
                     onSave = { edited ->
                         when {
                             orig.id == 0L -> {
@@ -273,12 +353,197 @@ fun App(repo: ScheduleRepository) {
     }
 }
 
+// ======================= НАСТРОЙКИ =======================
+@Composable
+fun SettingsScreen(
+    lessons: List<Lesson>,
+    slots: List<TimeSlot>,
+    onSlots: (List<TimeSlot>) -> Unit,
+    onImport: (List<Lesson>, Boolean) -> Unit,
+    onBack: () -> Unit
+) {
+    val c = C
+    val ctx = LocalContext.current
+    var editSlot by remember { mutableStateOf<TimeSlot?>(null) }
+    var pending by remember { mutableStateOf<List<Lesson>?>(null) }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            val ok = try {
+                val out = ctx.contentResolver.openOutputStream(uri)
+                if (out == null) {
+                    false
+                } else {
+                    out.use { it.write(LessonJson.toJson(lessons).toByteArray(Charsets.UTF_8)) }
+                    true
+                }
+            } catch (e: Exception) {
+                false
+            }
+            Toast.makeText(
+                ctx, if (ok) "События выгружены" else "Не удалось сохранить файл", Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            val text = try {
+                ctx.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+            } catch (e: Exception) {
+                null
+            }
+            val list = if (text != null && text.trim().startsWith("[")) LessonJson.fromJson(text) else emptyList()
+            if (list.isEmpty()) {
+                Toast.makeText(ctx, "Файл не содержит событий", Toast.LENGTH_SHORT).show()
+            } else {
+                pending = list
+            }
+        }
+    }
+
+    Column(Modifier.fillMaxSize().background(c.bg).pointerInput(Unit) {}) {
+        Row(
+            Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, null, tint = c.text) }
+            Text("Настройки", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = c.text)
+        }
+        Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text("Слоты времени", fontSize = 14.sp, color = c.accent, fontWeight = FontWeight.Bold)
+            if (slots.isEmpty()) Text("Слотов пока нет", color = c.sub)
+            slots.forEach { s ->
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(c.card).padding(start = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f).padding(vertical = 10.dp)) {
+                        Text(s.name, fontSize = 16.sp, color = c.text, fontWeight = FontWeight.Medium)
+                        Text("${s.start} – ${s.end}", fontSize = 13.sp, color = c.sub)
+                    }
+                    IconButton(onClick = { editSlot = s }) { Icon(Icons.Filled.Edit, null, tint = c.sub) }
+                    IconButton(onClick = { onSlots(slots.filter { it.id != s.id }) }) {
+                        Icon(Icons.Filled.Delete, null, tint = Color(0xFFE53935))
+                    }
+                }
+            }
+            TextButton(onClick = { editSlot = TimeSlot(0L, "", "08:30", "09:15") }) {
+                Icon(Icons.Filled.Add, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Добавить слот")
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Text("Экспорт / Импорт", fontSize = 14.sp, color = c.accent, fontWeight = FontWeight.Bold)
+            Button(
+                onClick = { exportLauncher.launch("schedule_events.json") },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Filled.Save, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Выгрузить события")
+            }
+            OutlinedButton(
+                onClick = { importLauncher.launch(arrayOf("*/*")) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Filled.FolderOpen, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Загрузить события")
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+
+    editSlot?.let { s ->
+        SlotDialog(
+            init = s,
+            onSave = { v ->
+                val fixed = if (v.id == 0L) v.copy(id = System.currentTimeMillis()) else v
+                val next = if (slots.any { it.id == fixed.id }) slots.map { if (it.id == fixed.id) fixed else it }
+                else slots + fixed
+                onSlots(next.sortedBy { it.start })
+                editSlot = null
+            },
+            onDismiss = { editSlot = null }
+        )
+    }
+
+    pending?.let { list ->
+        AlertDialog(
+            onDismissRequest = { pending = null },
+            title = { Text("Загрузка событий") },
+            text = { Text("Найдено событий в файле: ${list.size}") },
+            confirmButton = {
+                Column(horizontalAlignment = Alignment.End) {
+                    TextButton(onClick = { onImport(list, true); pending = null }) { Text("Заменить все") }
+                    TextButton(onClick = { onImport(list, false); pending = null }) { Text("Добавить") }
+                    TextButton(onClick = { pending = null }) { Text("Отмена") }
+                }
+            }
+        )
+    }
+}
+
+@Composable
+fun SlotDialog(init: TimeSlot, onSave: (TimeSlot) -> Unit, onDismiss: () -> Unit) {
+    val c = C
+    val (h1, m1) = remember { hmOf(init.start) }
+    val (h2, m2) = remember { hmOf(init.end) }
+    var name by remember { mutableStateOf(init.name) }
+    var sh by remember { mutableStateOf(h1) }
+    var sm by remember { mutableStateOf(m1) }
+    var eh by remember { mutableStateOf(h2) }
+    var em by remember { mutableStateOf(m2) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (init.id == 0L) "Новый слот" else "Редактирование слота") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    name, { name = it }, label = { Text("Название") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+                Text("Начало", color = c.sub, fontSize = 13.sp)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    Wheel(24, sh) { sh = it }
+                    Text(":", fontSize = 22.sp)
+                    Wheel(60, sm) { sm = it }
+                }
+                Text("Конец", color = c.sub, fontSize = 13.sp)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    Wheel(24, eh) { eh = it }
+                    Text(":", fontSize = 22.sp)
+                    Wheel(60, em) { em = it }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val s = "%02d:%02d".format(sh, sm)
+                var e = "%02d:%02d".format(eh, em)
+                if (e < s) e = s
+                onSave(init.copy(name = name.trim().ifBlank { "Слот" }, start = s, end = e))
+            }) { Text("Сохранить") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
+    )
+}
+
 // ======================= ГЛАВНЫЙ ЭКРАН =======================
 @Composable
 fun MainScreen(
     lessons: List<Lesson>, today: LocalDate, selected: LocalDate,
     onSelect: (LocalDate) -> Unit, onOpen: (Lesson, LocalDate) -> Unit,
-    onNew: () -> Unit, onManualSync: () -> Unit
+    onNew: () -> Unit, onManualSync: () -> Unit, onMenu: () -> Unit
 ) {
     val c = C
     val scope = rememberCoroutineScope()
@@ -293,7 +558,6 @@ fun MainScreen(
 
     BackHandler(enabled = searching) { searching = false; query = "" }
 
-    // свайп месяца -> выбранная дата
     LaunchedEffect(pager) {
         snapshotFlow { pager.settledPage }.collect { p ->
             val ym = anchorMonth.plusMonths((p - MONTH_BASE).toLong())
@@ -303,7 +567,6 @@ fun MainScreen(
             }
         }
     }
-    // выбранная дата -> страница месяца
     LaunchedEffect(selected) {
         val target = (MONTH_BASE + ChronoUnit.MONTHS.between(anchorMonth, YearMonth.from(selected))).toInt()
         if (target in 0 until MONTH_COUNT && pager.currentPage != target) pager.animateScrollToPage(target)
@@ -403,17 +666,17 @@ fun MainScreen(
                     }
                 }
             } else {
-                // ---------- верхняя панель ----------
                 val shown = anchorMonth.plusMonths((pager.currentPage - MONTH_BASE).toLong())
                 val title = shown.month.getDisplayName(TextStyle.FULL_STANDALONE, RU)
                     .replaceFirstChar { it.uppercase() } + " " + shown.year
                 Row(
-                    Modifier.fillMaxWidth().height(56.dp).padding(start = 16.dp, end = 12.dp),
+                    Modifier.fillMaxWidth().height(56.dp).padding(start = 4.dp, end = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    IconButton(onClick = onMenu) { Icon(Icons.Filled.Menu, null, tint = c.text) }
                     Text(
                         title, fontSize = 22.sp, fontWeight = FontWeight.Bold,
-                        color = c.text, modifier = Modifier.weight(1f)
+                        color = c.text, modifier = Modifier.weight(1f).padding(start = 4.dp)
                     )
                     IconButton(onClick = { searching = true }) {
                         Icon(Icons.Filled.Search, null, tint = c.text)
@@ -428,7 +691,6 @@ fun MainScreen(
                         Text("${today.dayOfMonth}", color = c.text, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     }
                 }
-                // ---------- дни недели ----------
                 Row(Modifier.fillMaxWidth().height(28.dp), verticalAlignment = Alignment.CenterVertically) {
                     DAYS.forEachIndexed { i, d ->
                         Text(
@@ -437,7 +699,6 @@ fun MainScreen(
                         )
                     }
                 }
-                // ---------- сетка месяцев ----------
                 Box(Modifier.fillMaxWidth().height(cellH * 6).then(dragMod).clipToBounds()) {
                     HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
                         MonthGrid(
@@ -446,7 +707,6 @@ fun MainScreen(
                         )
                     }
                 }
-                // ---------- список событий ----------
                 Column(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
                     Row(
                         Modifier.fillMaxWidth().height(48.dp).then(dragMod).padding(start = 16.dp, end = 8.dp),
@@ -555,13 +815,14 @@ fun DayCell(
                 val max = ((cellH.value - 36f) / 16f).toInt().coerceIn(0, 4)
                 Spacer(Modifier.height(2.dp))
                 list.take(max).forEach { l ->
+                    val bg = parseColor(l.color)
                     Box(
                         Modifier.fillMaxWidth().padding(vertical = 1.dp).height(14.dp)
-                            .clip(RoundedCornerShape(3.dp)).background(parseColor(l.color))
+                            .clip(RoundedCornerShape(3.dp)).background(bg)
                             .padding(horizontal = 3.dp),
                         contentAlignment = Alignment.CenterStart
                     ) {
-                        Text(l.title, fontSize = 9.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(l.title, fontSize = 9.sp, color = onColor(bg), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             } else {
@@ -603,14 +864,44 @@ fun LessonCard(l: Lesson, dateLabel: String?, onClick: () -> Unit) {
     }
 }
 
+// ======================= ПАЛИТРА =======================
+@Composable
+fun ColorPicker(current: String, onPick: (String) -> Unit) {
+    val c = C
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf("Яркие" to PALETTE_BRIGHT, "Пастельные" to PALETTE_PASTEL, "Тёмные" to PALETTE_DARK)
+            .forEach { (label, list) ->
+                Text(label, fontSize = 12.sp, color = c.sub)
+                list.chunked(8).forEach { row ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        row.forEach { hex ->
+                            val col = parseColor(hex)
+                            Box(
+                                Modifier.size(32.dp).clip(CircleShape).background(col)
+                                    .border(1.dp, c.sub.copy(alpha = 0.3f), CircleShape)
+                                    .clickable { onPick(hex) },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (hex.equals(current, true)) {
+                                    Icon(Icons.Filled.Check, null, tint = onColor(col), modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+    }
+}
+
 // ======================= СОЗДАНИЕ / РЕДАКТИРОВАНИЕ =======================
 @Composable
 fun EditScreen(
-    init: Lesson, initDate: LocalDate,
+    init: Lesson, initDate: LocalDate, all: List<Lesson>, slots: List<TimeSlot>,
     onSave: (Lesson) -> Unit, onDelete: () -> Unit, onCancel: () -> Unit
 ) {
     val c = C
     var title by remember { mutableStateOf(init.title) }
+    var typed by remember { mutableStateOf(false) }
     var emoji by remember { mutableStateOf(init.emoji) }
     var color by remember { mutableStateOf(init.color) }
     var allDay by remember { mutableStateOf(init.isAllDay) }
@@ -619,6 +910,7 @@ fun EditScreen(
     var sm by remember { mutableStateOf(init.start.substringAfter(":").toIntOrNull() ?: 30) }
     var eh by remember { mutableStateOf(init.end.substringBefore(":").toIntOrNull() ?: 9) }
     var em by remember { mutableStateOf(init.end.substringAfter(":").toIntOrNull() ?: 15) }
+    var timeVer by remember { mutableStateOf(0) }
     var room by remember { mutableStateOf(init.room) }
     var recurrence by remember { mutableStateOf(init.recurrence) }
     var showEmoji by remember { mutableStateOf(false) }
@@ -626,6 +918,13 @@ fun EditScreen(
     var showDate by remember { mutableStateOf(false) }
     var showTime by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
+
+    val suggestions = remember(title, all, typed) {
+        if (!typed || title.isBlank()) emptyList()
+        else all.filter { it.id != init.id && it.title.contains(title.trim(), true) }
+            .distinctBy { listOf(it.title.lowercase(), it.recurrence, it.room, it.color) }
+            .take(4)
+    }
 
     val save = {
         val s = "%02d:%02d".format(sh, sm)
@@ -655,7 +954,7 @@ fun EditScreen(
             // название + эмодзи + цвет
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
-                    title, { title = it }, label = { Text("Название") },
+                    title, { title = it; typed = true }, label = { Text("Название") },
                     singleLine = true, modifier = Modifier.weight(1f)
                 )
                 Box(
@@ -668,9 +967,40 @@ fun EditScreen(
                 }
                 Box(
                     Modifier.size(32.dp).clip(CircleShape).background(parseColor(color))
+                        .border(1.dp, c.sub.copy(alpha = 0.3f), CircleShape)
                         .clickable { showColors = !showColors; showEmoji = false }
                 )
             }
+
+            // умные подсказки
+            if (suggestions.isNotEmpty()) {
+                Text("Похожие события", fontSize = 12.sp, color = c.sub)
+                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(c.card)) {
+                    suggestions.forEach { s ->
+                        val sub = listOf(
+                            s.room,
+                            if (s.recurrence != "NONE") recurrenceLabel(s.recurrence) else ""
+                        ).filter { it.isNotBlank() }.joinToString(" · ")
+                        Row(
+                            Modifier.fillMaxWidth().clickable {
+                                title = s.title
+                                recurrence = s.recurrence
+                                room = s.room
+                                color = s.color
+                                typed = false
+                            }.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(Modifier.size(10.dp).clip(CircleShape).background(parseColor(s.color)))
+                            Column(Modifier.padding(start = 10.dp)) {
+                                Text(s.title, fontSize = 15.sp, color = c.text)
+                                if (sub.isNotEmpty()) Text(sub, fontSize = 12.sp, color = c.sub)
+                            }
+                        }
+                    }
+                }
+            }
+
             if (showEmoji) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     EMOJIS.chunked(8).forEach { chunk ->
@@ -688,20 +1018,7 @@ fun EditScreen(
                 }
             }
             if (showColors) {
-                Row(
-                    Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    PALETTE.forEach { hex ->
-                        Box(
-                            Modifier.size(36.dp).clip(CircleShape).background(parseColor(hex))
-                                .clickable { color = hex; showColors = false },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (hex == color) Icon(Icons.Filled.Check, null, tint = Color.White, modifier = Modifier.size(20.dp))
-                        }
-                    }
-                }
+                ColorPicker(color) { color = it }
             }
 
             // весь день
@@ -723,8 +1040,33 @@ fun EditScreen(
                 )
             }
 
-            // время
+            // слоты и время
             if (!allDay) {
+                if (slots.isNotEmpty()) {
+                    Text("Слоты времени", fontSize = 12.sp, color = c.sub)
+                    Row(
+                        Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        slots.forEach { s ->
+                            val (h1, m1) = hmOf(s.start)
+                            val (h2, m2) = hmOf(s.end)
+                            val active = sh == h1 && sm == m1 && eh == h2 && em == m2
+                            Box(
+                                Modifier.clip(RoundedCornerShape(16.dp))
+                                    .background(if (active) c.accent.copy(alpha = 0.18f) else c.card)
+                                    .border(1.dp, if (active) c.accent else Color.Transparent, RoundedCornerShape(16.dp))
+                                    .clickable {
+                                        sh = h1; sm = m1; eh = h2; em = m2
+                                        timeVer += 1
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                Text("${s.name}  ${s.start}–${s.end}", fontSize = 13.sp, color = c.text)
+                            }
+                        }
+                    }
+                }
                 Row(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { showTime = !showTime }.padding(vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -744,17 +1086,17 @@ fun EditScreen(
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("Начало", color = c.sub, fontSize = 13.sp)
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Wheel(24, sh) { sh = it }
+                                Wheel(24, sh, timeVer) { sh = it }
                                 Text(":", fontSize = 22.sp, color = c.text)
-                                Wheel(60, sm) { sm = it }
+                                Wheel(60, sm, timeVer) { sm = it }
                             }
                         }
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("Конец", color = c.sub, fontSize = 13.sp)
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Wheel(24, eh) { eh = it }
+                                Wheel(24, eh, timeVer) { eh = it }
                                 Text(":", fontSize = 22.sp, color = c.text)
-                                Wheel(60, em) { em = it }
+                                Wheel(60, em, timeVer) { em = it }
                             }
                         }
                     }
@@ -827,7 +1169,7 @@ fun EditScreen(
 }
 
 @Composable
-fun Wheel(count: Int, value: Int, onChange: (Int) -> Unit) {
+fun Wheel(count: Int, value: Int, version: Int = 0, onChange: (Int) -> Unit) {
     val c = C
     val itemH = 40.dp
     val itemPx = with(LocalDensity.current) { itemH.toPx() }
@@ -841,6 +1183,10 @@ fun Wheel(count: Int, value: Int, onChange: (Int) -> Unit) {
         }
     }
     LaunchedEffect(Unit) { snapshotFlow { sel }.collect { cb(it) } }
+    // внешнее изменение значения (выбор слота времени)
+    LaunchedEffect(version) {
+        if (version > 0) state.scrollToItem(value.coerceIn(0, count - 1))
+    }
 
     Box(Modifier.width(56.dp).height(itemH * 3), contentAlignment = Alignment.Center) {
         Box(Modifier.fillMaxWidth().height(itemH).clip(RoundedCornerShape(10.dp)).background(c.card))

@@ -1,8 +1,12 @@
 package com.example.schedule
 
 import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
 import java.time.DayOfWeek
 import java.time.LocalDate
+
+data class TimeSlot(val id: Long, val name: String, val start: String, val end: String)
 
 class ScheduleRepository(ctx: Context) {
     private val sp = ctx.getSharedPreferences("schedule", Context.MODE_PRIVATE)
@@ -15,6 +19,35 @@ class ScheduleRepository(ctx: Context) {
     fun save(list: List<Lesson>) {
         sp.edit().putString("json", LessonJson.toJson(list)).apply()
     }
+
+    // ---------- слоты времени ----------
+    fun loadSlots(): List<TimeSlot> {
+        val s = sp.getString("slots", null) ?: return defaultSlots().also { saveSlots(it) }
+        return try {
+            val a = JSONArray(s)
+            (0 until a.length()).map {
+                val o = a.getJSONObject(it)
+                TimeSlot(o.getLong("id"), o.optString("name", ""), o.getString("start"), o.getString("end"))
+            }
+        } catch (e: Exception) {
+            defaultSlots()
+        }
+    }
+
+    fun saveSlots(list: List<TimeSlot>) {
+        val arr = JSONArray()
+        list.forEach {
+            arr.put(JSONObject().put("id", it.id).put("name", it.name).put("start", it.start).put("end", it.end))
+        }
+        sp.edit().putString("slots", arr.toString()).apply()
+    }
+
+    private fun defaultSlots() = listOf(
+        TimeSlot(1, "1 урок", "08:30", "09:15"),
+        TimeSlot(2, "2 урок", "09:25", "10:10"),
+        TimeSlot(3, "3 урок", "10:25", "11:10"),
+        TimeSlot(4, "4 урок", "11:20", "12:05")
+    )
 
     private fun weekly(
         id: Long, dow: DayOfWeek, start: String, end: String,

@@ -2,10 +2,12 @@
 
 package com.example.schedule
 
+import android.graphics.Paint
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -20,7 +22,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -31,13 +37,26 @@ import androidx.wear.compose.foundation.lazy.items
 import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 private const val RANGE = 30
 private val RU: Locale = Locale("ru")
+
+private fun curMin(): Int {
+    val t = LocalTime.now()
+    return t.hour * 60 + t.minute
+}
+
+private fun toMin(s: String): Int {
+    val h = s.substringBefore(":").toIntOrNull() ?: 0
+    val m = s.substringAfter(":").toIntOrNull() ?: 0
+    return h * 60 + m
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,9 +71,18 @@ fun WearApp() {
     val lessons by ScheduleRepository.lessons.collectAsState()
     var detail by remember { mutableStateOf<Lesson?>(null) }
     var drawer by remember { mutableStateOf(false) }
+    var nowMin by remember { mutableStateOf(curMin()) }
     val today = remember { LocalDate.now() }
     val pager = rememberPagerState(initialPage = RANGE) { RANGE * 2 + 1 }   // ±30 дней
     val scope = rememberCoroutineScope()
+
+    // обновление шкалы времени раз в минуту
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(60_000L)
+            nowMin = curMin()
+        }
+    }
 
     BackHandler(enabled = detail != null || drawer) {
         if (drawer) drawer = false else detail = null
@@ -65,8 +93,9 @@ fun WearApp() {
             val d = detail
             if (d == null) {
                 HorizontalPager(state = pager) { page ->
+                    val date = today.plusDays((page - RANGE).toLong())
                     DayPage(
-                        today.plusDays((page - RANGE).toLong()), lessons,
+                        date, lessons, isToday = date == today, nowMin = nowMin,
                         onOpen = { detail = it }, onTitle = { drawer = true }
                     )
                 }
@@ -134,7 +163,76 @@ fun DatesDrawer(today: LocalDate, current: Int, onPick: (Int) -> Unit) {
 }
 
 @Composable
-fun DayPage(date: LocalDate, all: List<Lesson>, onOpen: (Lesson) -> Unit, onTitle: () -> Unit) {
+fun TimeScale(lessons: List<Lesson>, isToday: Boolean, nowMin: Int, modifier: Modifier) {
+    val hourPaint = remember {
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.parseColor("#9B98AD")
+            textAlign = Paint.Align.RIGHT
+        }
+    }
+    val timePaint = remember {
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.RED
+            textAlign = Paint.Align.RIGHT
+            isFakeBoldText = true
+        }
+    }
+    Canvas(modifier) {
+        val startMin = 8 * 60
+        val endMin = 18 * 60
+        val total = (endMin - startMin).toFloat()
+        val h = size.height
+        fun y(min: Int): Float = (min - startMin) / total * h
+
+        hourPaint.textSize = 9.sp.toPx()
+        timePaint.textSize = 9.sp.toPx()
+        val axisX = 17.dp.toPx()
+        val axisColor = Color(0xFF3A3A44)
+
+        drawLine(axisColor, Offset(axisX, 0f), Offset(axisX, h), strokeWidth = 1.dp.toPx())
+        for (hr in 8..18 step 2) {
+            val yy = y(hr * 60)
+            drawLine(axisColor, Offset(axisX - 3.dp.toPx(), yy), Offset(axisX + 3.dp.toPx(), yy), strokeWidth = 1.dp.toPx())
+            drawContext.canvas.nativeCanvas.drawText("%02d".format(hr), axisX - 5.dp.toPx(), yy + 3.dp.toPx(), hourPaint)
+        }
+
+        lessons.forEach { l ->
+            if (l.isAllDay) return@forEach
+            val s = toMin(l.start)
+            val e = toMin(l.end)
+            val cs = maxOf(s, startMin)
+            val ce = minOf(e, endMin)
+            if (ce <= cs) return@forEach
+            val current = isToday && nowMin >= s && nowMin < e
+            val col = if (current) Color(0xFF8A8A8A) else parseColor(l.color)
+            val top = y(cs)
+            val hh = (y(ce) - top).coerceAtLeast(2.dp.toPx())
+            drawRoundRect(
+                color = col,
+                topLeft = Offset(axisX + 3.dp.toPx(), top),
+                size = Size(10.dp.toPx(), hh),
+                cornerRadius = CornerRadius(3.dp.toPx())
+            )
+        }
+
+        if (isToday && nowMin in startMin..endMin) {
+            val yy = y(nowMin)
+            val tagW = 24.dp.toPx()
+            drawRect(Color.Black, Offset(0f, yy - 6.dp.toPx()), Size(tagW, 12.dp.toPx()))
+            drawContext.canvas.nativeCanvas.drawText(
+                "%02d:%02d".format(nowMin / 60, nowMin % 60),
+                tagW, yy + 3.dp.toPx(), timePaint
+            )
+            drawLine(Color.Red, Offset(tagW, yy), Offset(size.width, yy), strokeWidth = 1.5.dp.toPx())
+        }
+    }
+}
+
+@Composable
+fun DayPage(
+    date: LocalDate, all: List<Lesson>, isToday: Boolean, nowMin: Int,
+    onOpen: (Lesson) -> Unit, onTitle: () -> Unit
+) {
     val day = remember(all, date) {
         all.filter { it.occursOn(date) }
             .sortedWith(compareByDescending<Lesson> { it.isAllDay }.thenBy { it.start })
@@ -150,10 +248,15 @@ fun DayPage(date: LocalDate, all: List<Lesson>, onOpen: (Lesson) -> Unit, onTitl
         } else {
             ScalingLazyColumn(
                 Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(top = 56.dp, bottom = 36.dp, start = 14.dp, end = 14.dp),
+                contentPadding = PaddingValues(top = 56.dp, bottom = 36.dp, start = 68.dp, end = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) { items(day) { WearCard(it) { onOpen(it) } } }
         }
+        TimeScale(
+            lessons = day, isToday = isToday, nowMin = nowMin,
+            modifier = Modifier.align(Alignment.CenterStart).padding(start = 24.dp)
+                .width(40.dp).fillMaxHeight(0.56f)
+        )
         Text(
             "‹   $title   ›", color = Pal.Text, fontSize = 14.sp, fontWeight = FontWeight.Medium,
             modifier = Modifier.align(Alignment.TopCenter).padding(top = 20.dp).clickable(onClick = onTitle)
@@ -165,21 +268,21 @@ fun DayPage(date: LocalDate, all: List<Lesson>, onOpen: (Lesson) -> Unit, onTitl
 fun WearCard(l: Lesson, onClick: () -> Unit) {
     val col = parseColor(l.color)
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Pal.Card)
-            .clickable(onClick = onClick).padding(10.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Pal.Card)
+            .clickable(onClick = onClick).padding(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(Modifier.width(4.dp).height(36.dp).clip(RoundedCornerShape(2.dp)).background(col))
-        Column(Modifier.weight(1f).padding(start = 8.dp)) {
-            Text(l.timeLabel(), color = Pal.Dim, fontSize = 12.sp, maxLines = 1)
-            Text(l.title, color = Pal.Text, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        Box(Modifier.width(4.dp).height(32.dp).clip(RoundedCornerShape(2.dp)).background(col))
+        Column(Modifier.weight(1f).padding(start = 6.dp)) {
+            Text(l.timeLabel(), color = Pal.Dim, fontSize = 11.sp, maxLines = 1)
+            Text(l.title, color = Pal.Text, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
         }
         Box(
-            Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(col.copy(alpha = 0.3f)),
+            Modifier.size(26.dp).clip(RoundedCornerShape(8.dp)).background(col.copy(alpha = 0.3f)),
             contentAlignment = Alignment.Center
         ) {
-            if (l.emoji.isNotBlank()) Text(l.emoji, fontSize = 18.sp)
-            else Icon(iconFor(l.icon), null, tint = col, modifier = Modifier.size(22.dp))
+            if (l.emoji.isNotBlank()) Text(l.emoji, fontSize = 14.sp)
+            else Icon(iconFor(l.icon), null, tint = col, modifier = Modifier.size(16.dp))
         }
     }
 }
