@@ -54,6 +54,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -68,7 +69,9 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
@@ -172,6 +175,7 @@ fun App(repo: ScheduleRepository) {
     var pendingSave by remember { mutableStateOf<Lesson?>(null) }
     var pendingDelete by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var showSend by remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
 
     fun sync(list: List<Lesson>, notify: Boolean) {
@@ -185,6 +189,23 @@ fun App(repo: ScheduleRepository) {
                 }
                 Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+
+    fun sendNote(text: String) {
+        scope.launch {
+            val json = JSONObject()
+                .put("id", System.currentTimeMillis().toString())
+                .put("text", text)
+                .put("time", LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm")))
+                .toString()
+            val r = DataSyncService.sendFile(ctx, json)
+            val msg = when {
+                r > 0 -> "Отправлено на часы"
+                r == -2 -> "Текст слишком большой"
+                else -> "Часы не найдены"
+            }
+            Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -213,6 +234,16 @@ fun App(repo: ScheduleRepository) {
                     Text(
                         "Расписание", fontSize = 22.sp, fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 24.dp)
+                    )
+                    NavigationDrawerItem(
+                        label = { Text("Отправить") },
+                        icon = { Icon(Icons.Filled.Send, null) },
+                        selected = false,
+                        onClick = {
+                            scope.launch { drawerState.close() }
+                            showSend = true
+                        },
+                        modifier = Modifier.padding(horizontal = 12.dp)
                     )
                     NavigationDrawerItem(
                         label = { Text("Настройки") },
@@ -294,6 +325,13 @@ fun App(repo: ScheduleRepository) {
         }
     }
 
+    if (showSend) {
+        SendDialog(
+            onSend = { sendNote(it); showSend = false },
+            onDismiss = { showSend = false }
+        )
+    }
+
     val orig = editing
     val ps = pendingSave
     if (ps != null && orig != null) {
@@ -351,6 +389,43 @@ fun App(repo: ScheduleRepository) {
             }
         )
     }
+}
+
+// ======================= ОТПРАВКА ТЕКСТА НА ЧАСЫ =======================
+@Composable
+fun SendDialog(onSend: (String) -> Unit, onDismiss: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    var text by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Отправить на часы") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = text, onValueChange = { text = it },
+                    label = { Text("Текст или формулы") },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 240.dp)
+                )
+                TextButton(onClick = {
+                    val clip = clipboard.getText()?.text
+                    if (!clip.isNullOrEmpty()) {
+                        text = if (text.isEmpty()) clip else text + "\n" + clip
+                    }
+                }) {
+                    Icon(Icons.Filled.ContentPaste, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Вставить из буфера")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { if (text.isNotBlank()) onSend(text) },
+                enabled = text.isNotBlank()
+            ) { Text("Отправить") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
+    )
 }
 
 // ======================= НАСТРОЙКИ =======================
