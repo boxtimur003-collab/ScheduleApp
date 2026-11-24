@@ -765,7 +765,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun WearAppOld() {
+fun WearApp() {
     val ctx = LocalContext.current
     val lessons by ScheduleRepository.lessons.collectAsState()
     val files by FileStore.files.collectAsState()
