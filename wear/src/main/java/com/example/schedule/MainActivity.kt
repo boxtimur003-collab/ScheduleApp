@@ -760,6 +760,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         ScheduleRepository.init(this)
         FileStore.init(this)
+        Notifier.askPermission(this)
+        Notifier.rescheduleFromStore(this)
         setContent { WearApp() }
     }
 }
@@ -824,7 +826,8 @@ fun WearApp() {
                     Overlay.MENU -> MenuPanel(
                         filesCount = files.size,
                         onDates = { overlay = Overlay.DATES },
-                        onFiles = { overlay = Overlay.FILES }
+                        onFiles = { overlay = Overlay.FILES },
+                        onFace = { openWatchFacePicker(ctx) }
                     )
                     Overlay.DATES -> DatesDrawer(today, pager.currentPage - RANGE) { i ->
                         overlay = Overlay.NONE
@@ -874,7 +877,7 @@ fun MenuButton(icon: ImageVector, label: String, onClick: () -> Unit) {
 }
 
 @Composable
-fun MenuPanel(filesCount: Int, onDates: () -> Unit, onFiles: () -> Unit) {
+fun MenuPanel(filesCount: Int, onDates: () -> Unit, onFiles: () -> Unit, onFace: () -> Unit = {}) {
     Box(
         Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.96f)).pointerInput(Unit) {},
         contentAlignment = Alignment.Center
@@ -886,6 +889,7 @@ fun MenuPanel(filesCount: Int, onDates: () -> Unit, onFiles: () -> Unit) {
         ) {
             MenuButton(Icons.Filled.CalendarMonth, "Даты", onDates)
             MenuButton(Icons.Filled.Description, if (filesCount > 0) "Файлы ($filesCount)" else "Файлы", onFiles)
+            MenuButton(Icons.Filled.Watch, "Циферблат", onFace)
         }
     }
 }

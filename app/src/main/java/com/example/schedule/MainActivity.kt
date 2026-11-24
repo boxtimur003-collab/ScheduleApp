@@ -223,7 +223,6 @@ fun App(repo: ScheduleRepository) {
     }
 
     LaunchedEffect(Unit) { sync(lessons, false); Notifier.rescheduleAll(ctx, lessons) }
-    NotifPermission()
     BackHandler(enabled = drawerState.isOpen) { scope.launch { drawerState.close() } }
     BackHandler(enabled = showSettings && editing == null) { showSettings = false }
     BackHandler(enabled = editing != null) { editing = null }
