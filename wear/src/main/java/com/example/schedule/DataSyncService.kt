@@ -25,10 +25,7 @@ object FileStore {
         val a = JSONArray(prefs(ctx).getString("json", "[]") ?: "[]")
         (0 until a.length()).map {
             val o = a.getJSONObject(it)
-            WearFile(
-                o.getString("id"), o.optString("name", "Файл"),
-                o.optString("text", ""), o.optString("time", "")
-            )
+            WearFile(o.getString("id"), o.optString("name", "Файл"), o.optString("text", ""), o.optString("time", ""))
         }
     } catch (e: Exception) {
         emptyList()
@@ -47,22 +44,26 @@ object FileStore {
         _files.value = read(ctx)
     }
 
-    /** json: {"id": "...", "text": "...", "time": "HH:mm"} */
+    /** json: {"id","name","text","time"}. Файл с тем же id перезаписывается. */
     @Synchronized
-    fun add(ctx: Context, json: String) {
+    fun upsert(ctx: Context, json: String) {
         val o = try { JSONObject(json) } catch (e: Exception) { return }
         val text = o.optString("text", "")
         if (text.isBlank()) return
         val id = o.optString("id", "").ifBlank { System.currentTimeMillis().toString() }
-        val time = o.optString("time", "").ifBlank {
-            LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm"))
-        }
+        val time = o.optString("time", "").ifBlank { LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm")) }
+        val name = o.optString("name", "")
         val cur = read(ctx)
-        if (cur.any { it.id == id }) return
-        val p = prefs(ctx)
-        val n = p.getInt("counter", 0) + 1
-        p.edit().putInt("counter", n).apply()
-        write(ctx, (cur + WearFile(id, "Файл $n", text, time)).takeLast(MAX))
+        val i = cur.indexOfFirst { it.id == id }
+        val next = if (i >= 0) {
+            cur.toMutableList().also { it[i] = it[i].copy(name = name.ifBlank { it[i].name }, text = text, time = time) }
+        } else {
+            val p = prefs(ctx)
+            val n = p.getInt("counter", 0) + 1
+            p.edit().putInt("counter", n).apply()
+            cur + WearFile(id, name.ifBlank { "Файл $n" }, text, time)
+        }
+        write(ctx, next.takeLast(MAX))
     }
 
     @Synchronized
@@ -76,8 +77,12 @@ class DataSyncService : WearableListenerService() {
         try {
             val body = String(event.data, Charsets.UTF_8)
             when (event.path) {
-                "/schedule" -> ScheduleRepository.update(applicationContext, body)
-                "/file" -> FileStore.add(applicationContext, body)
+                "/schedule" -> if (body.trim().startsWith("[")) {
+                    ScheduleRepository.update(applicationContext, body)
+                    Notifier.rescheduleAll(applicationContext, LessonJson.fromJson(body))
+                }
+                "/file" -> FileStore.upsert(applicationContext, body)
+                "/file_delete" -> FileStore.delete(applicationContext, body.trim())
             }
         } catch (e: Exception) {
             // повреждённые данные игнорируем, на часах остаётся прежнее состояние

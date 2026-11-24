@@ -176,6 +176,7 @@ fun App(repo: ScheduleRepository) {
     var pendingDelete by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showSend by remember { mutableStateOf(false) }
+    var showFiles by remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
 
     fun sync(list: List<Lesson>, notify: Boolean) {
@@ -212,6 +213,7 @@ fun App(repo: ScheduleRepository) {
     fun persist(list: List<Lesson>) {
         lessons = list
         repo.save(list)
+        Notifier.rescheduleAll(ctx, list)
         sync(list, true)
     }
 
@@ -220,7 +222,8 @@ fun App(repo: ScheduleRepository) {
         repo.saveSlots(list)
     }
 
-    LaunchedEffect(Unit) { sync(lessons, false) }
+    LaunchedEffect(Unit) { sync(lessons, false); Notifier.rescheduleAll(ctx, lessons) }
+    NotifPermission()
     BackHandler(enabled = drawerState.isOpen) { scope.launch { drawerState.close() } }
     BackHandler(enabled = showSettings && editing == null) { showSettings = false }
     BackHandler(enabled = editing != null) { editing = null }
@@ -234,6 +237,16 @@ fun App(repo: ScheduleRepository) {
                     Text(
                         "Расписание", fontSize = 22.sp, fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 24.dp)
+                    )
+                    NavigationDrawerItem(
+                        label = { Text("Мои файлы") },
+                        icon = { Icon(Icons.Filled.Description, null) },
+                        selected = false,
+                        onClick = {
+                            scope.launch { drawerState.close() }
+                            showFiles = true
+                        },
+                        modifier = Modifier.padding(horizontal = 12.dp)
                     )
                     NavigationDrawerItem(
                         label = { Text("Отправить") },
@@ -294,6 +307,7 @@ fun App(repo: ScheduleRepository) {
             )
         }
 
+        if (showFiles) MyFilesHost { showFiles = false }
         editing?.let { orig ->
             key(orig.id) {
                 EditScreen(
@@ -988,6 +1002,7 @@ fun EditScreen(
     var timeVer by remember { mutableStateOf(0) }
     var room by remember { mutableStateOf(init.room) }
     var recurrence by remember { mutableStateOf(init.recurrence) }
+    var notifyMin by remember { mutableStateOf(init.notificationMinutes) }
     var showEmoji by remember { mutableStateOf(false) }
     var showColors by remember { mutableStateOf(false) }
     var showDate by remember { mutableStateOf(false) }
@@ -1009,7 +1024,7 @@ fun EditScreen(
             init.copy(
                 title = title.trim().ifBlank { "Событие" }, emoji = emoji, color = color,
                 isAllDay = allDay, date = date.toString(), start = s, end = e,
-                room = room.trim(), recurrence = recurrence
+                room = room.trim(), recurrence = recurrence, notificationMinutes = notifyMin
             )
         )
     }
@@ -1203,6 +1218,7 @@ fun EditScreen(
                 }
             }
 
+            NotifyRow(notifyMin) { notifyMin = it }
             if (init.id != 0L) {
                 TextButton(onClick = onDelete) { Text("Удалить событие", color = Color(0xFFE53935)) }
             }

@@ -11,6 +11,7 @@ import java.time.temporal.ChronoUnit
  * date: "2026-11-20" (разовое - дата события, повторяющееся - дата первого вхождения)
  * recurrence: NONE | DAILY | WEEKLY | MONTHLY | YEARLY
  * exceptions: даты "yyyy-MM-dd", в которые повторяющееся событие НЕ показывается
+ * notificationMinutes: -1 = не напоминать, 0 = в момент начала, N = за N минут
  */
 data class Lesson(
     val id: Long,
@@ -24,7 +25,8 @@ data class Lesson(
     val room: String = "",
     val icon: String = "other",
     val emoji: String = "",
-    val exceptions: List<String> = emptyList()
+    val exceptions: List<String> = emptyList(),
+    val notificationMinutes: Int = -1
 )
 
 val PALETTE = listOf(
@@ -39,6 +41,18 @@ val RECURRENCES = listOf(
     "MONTHLY" to "Каждый месяц",
     "YEARLY" to "Каждый год"
 )
+
+val NOTIFY_OPTIONS = listOf(
+    -1 to "Не напоминать",
+    0 to "В момент начала",
+    5 to "За 5 мин",
+    15 to "За 15 мин",
+    30 to "За 30 мин",
+    60 to "За 1 час"
+)
+
+fun notifyLabel(m: Int): String =
+    NOTIFY_OPTIONS.firstOrNull { it.first == m }?.second ?: if (m < 0) "Не напоминать" else "За $m мин"
 
 fun recurrenceLabel(r: String): String = RECURRENCES.firstOrNull { it.first == r }?.second ?: "Не повторять"
 
@@ -95,6 +109,7 @@ object LessonJson {
                     .put("icon", it.icon)
                     .put("emoji", it.emoji)
                     .put("exceptions", JSONArray(it.exceptions))
+                    .put("notificationMinutes", it.notificationMinutes)
             )
         }
         return arr.toString()
@@ -131,7 +146,8 @@ object LessonJson {
             room = o.optString("room", ""),
             icon = o.optString("icon", "other"),
             emoji = o.optString("emoji", ""),
-            exceptions = exceptions
+            exceptions = exceptions,
+            notificationMinutes = o.optInt("notificationMinutes", -1)
         )
     }
 }
