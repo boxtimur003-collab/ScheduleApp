@@ -2,36 +2,36 @@ package com.example.schedule
 
 import android.app.Activity
 import android.app.AlarmManager
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.os.Build
-import android.os.VibrationEffect
-import android.os.Vibrator
-import android.os.VibratorManager
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 
-object Notifier {
-    private const val CH = "reminders_v2"
-    private const val OLD_CH = "reminders"
-    private val PATTERN = longArrayOf(0, 200, 100, 200)   // 2 коротких сигнала
+/** «100» -> «Каб. 100»; если уже написано слово, остаётся как есть. */
+fun roomLabel(room: String): String {
+    val r = room.trim()
+    return if (r.isNotEmpty() && r[0].isDigit()) "Каб. $r" else r
+}
 
-    /** Запрос разрешения на уведомления (Android 13+). */
-    fun askPermission(act: Activity) {
-        if (Build.VERSION.SDK_INT >= 33 &&
-            act.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            act.requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 77)
-        }
-    }
+object Notifier {
+    private const val CH = "reminders_v3"
+    private val OLD_CHANNELS = listOf("reminders", "reminders_v2")
+    private val PATTERN = longArrayOf(0, 200, 100, 200)   // 2 коротких сигнала
+    private const val WITH_SOUND = true                   // false = только вибрация
+
+    /** Последовательный запрос разрешений (уведомления, будильники, полный экран, поверх окон). */
+    fun askPermission(act: Activity) = Perms.start(act)
 
     private fun codeOf(id: Long): Int = (id xor (id ushr 32)).toInt() and 0x7fffffff
 
@@ -56,7 +56,6 @@ object Notifier {
         return d.atTime(h, m)
     }
 
-    /** Ближайшее срабатывание строго позже now (для повторяющихся - ближайшее вхождение). */
     private fun nextTrigger(l: Lesson, now: LocalDateTime): LocalDateTime? {
         val lead = l.notificationMinutes.toLong()
         val today = now.toLocalDate()
@@ -69,23 +68,10 @@ object Notifier {
         return null
     }
 
-    private fun plural(n: Int, one: String, few: String, many: String): String {
-        val a = n % 100
-        val b = n % 10
-        return if (a in 11..14) many else when (b) {
-            1 -> one
-            in 2..4 -> few
-            else -> many
-        }
-    }
-
-    private fun leadText(m: Int): String = when {
+    fun leadText(m: Int): String = when {
         m <= 0 -> "начинается сейчас"
-        m % 60 == 0 -> {
-            val h = m / 60
-            "через $h ${plural(h, "час", "часа", "часов")}"
-        }
-        else -> "через $m ${plural(m, "минуту", "минуты", "минут")}"
+        m % 60 == 0 -> "через ${m / 60} ч"
+        else -> "через $m мин"
     }
 
     fun rescheduleAll(ctx: Context, list: List<Lesson>) {
@@ -129,77 +115,77 @@ object Notifier {
     }
 
     private fun ensureChannel(nm: NotificationManager) {
-        if (nm.getNotificationChannel(OLD_CH) != null) nm.deleteNotificationChannel(OLD_CH)
+        OLD_CHANNELS.forEach { if (nm.getNotificationChannel(it) != null) nm.deleteNotificationChannel(it) }
         if (nm.getNotificationChannel(CH) == null) {
             val ch = NotificationChannel(CH, "Напоминания", NotificationManager.IMPORTANCE_HIGH)
             ch.description = "Напоминания о событиях расписания"
-            ch.enableVibration(false)   // вибрируем вручную через Vibrator, чтобы не было двойного сигнала
-            ch.setSound(null, null)
-            ch.enableLights(false)
+            ch.enableVibration(true)
+            ch.vibrationPattern = PATTERN
+            if (WITH_SOUND) {
+                ch.setSound(
+                    RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+            } else {
+                ch.setSound(null, null)
+            }
+            ch.lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             nm.createNotificationChannel(ch)
         }
     }
 
-    @Suppress("DEPRECATION")
-    private fun vibrate(ctx: Context) {
-        try {
-            val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            val f = nm.currentInterruptionFilter
-            if (f == NotificationManager.INTERRUPTION_FILTER_NONE ||
-                f == NotificationManager.INTERRUPTION_FILTER_ALARMS
-            ) return
-            val v: Vibrator? = if (Build.VERSION.SDK_INT >= 31) {
-                (ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
-            } else {
-                ctx.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-            }
-            if (v == null || !v.hasVibrator()) return
-            val attrs = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
-            v.vibrate(VibrationEffect.createWaveform(PATTERN, -1), attrs)
-        } catch (e: Exception) {
-        }
-    }
-
-    fun show(ctx: Context, code: Int, title: String, lead: String, time: String, room: String) {
-        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    /** Показ напоминания: уведомление с полноэкранным интентом + крестик «Закрыть». */
+    fun fire(ctx: Context, code: Int, title: String, lead: String, time: String, room: String) {
+        val app = ctx.applicationContext
+        val nm = app.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         ensureChannel(nm)
-        val open = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)?.let {
-            PendingIntent.getActivity(ctx, 0, it, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        }
+        val full = Intent(app, ReminderActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            .putExtra("code", code)
+            .putExtra("title", title)
+            .putExtra("lead", lead)
+            .putExtra("time", time)
+            .putExtra("room", room)
+        val fs = PendingIntent.getActivity(
+            app, code, full, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         val close = PendingIntent.getBroadcast(
-            ctx, code,
-            Intent(ctx, NotifDismissReceiver::class.java)
-                .setAction(ctx.packageName + ".DISMISS")
+            app, code,
+            Intent(app, NotifDismissReceiver::class.java)
+                .setAction(app.packageName + ".DISMISS")
                 .putExtra("code", code),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val short = listOf(lead, room).filter { it.isNotBlank() }.joinToString(" · ")
-        val full = listOf(lead, time, room).filter { it.isNotBlank() }.joinToString("\n")
-        val n = NotificationCompat.Builder(ctx, CH)
+        val rl = roomLabel(room)
+        val short = listOf(lead, rl).filter { it.isNotBlank() }.joinToString(" · ")
+        val big = listOf(lead, time, rl).filter { it.isNotBlank() }.joinToString("\n")
+        val n = NotificationCompat.Builder(app, CH)
             .setSmallIcon(R.drawable.ic_notif)
             .setContentTitle(title)
             .setContentText(short)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(full))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(big))
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
             .setLocalOnly(true)
-            .setOnlyAlertOnce(true)
-            .setContentIntent(open)
+            .setTimeoutAfter(10 * 60 * 1000L)
+            .setFullScreenIntent(fs, true)
+            .setContentIntent(fs)
             .addAction(NotificationCompat.Action.Builder(R.drawable.ic_close, "Закрыть", close).build())
             .build()
         try {
             nm.notify(code, n)
         } catch (e: SecurityException) {
         }
-    }
-
-    fun fire(ctx: Context, code: Int, title: String, lead: String, time: String, room: String) {
-        show(ctx, code, title, lead, time, room)
-        vibrate(ctx)
+        // если выдано «поверх других окон», окно открывается сразу, даже когда экран включён
+        try {
+            if (Settings.canDrawOverlays(app)) app.startActivity(full)
+        } catch (e: Exception) {
+        }
     }
 }
 
@@ -223,7 +209,7 @@ class BootReceiver : BroadcastReceiver() {
     }
 }
 
-/** Кнопка-крестик в уведомлении: просто закрывает его. */
+/** Крестик в уведомлении: просто закрывает его. */
 class NotifDismissReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, i: Intent) {
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

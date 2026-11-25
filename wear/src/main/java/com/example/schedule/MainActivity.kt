@@ -772,7 +772,7 @@ fun WearApp() {
     val lessons by ScheduleRepository.lessons.collectAsState()
     val files by FileStore.files.collectAsState()
     var detail by remember { mutableStateOf<Lesson?>(null) }
-    var overlay by remember { mutableStateOf(Overlay.NONE) }
+    var overlay by remember { mutableStateOf(initialOverlay(ctx)) }
     var openId by remember { mutableStateOf<String?>(null) }
     var nowMin by remember { mutableStateOf(curMin()) }
     val today = remember { LocalDate.now() }

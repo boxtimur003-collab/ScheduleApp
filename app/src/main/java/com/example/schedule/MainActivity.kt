@@ -808,15 +808,11 @@ fun MainScreen(
                         )
                         IconButton(onClick = onNew) { Icon(Icons.Filled.Add, null, tint = c.accent) }
                     }
-                    LazyColumn(
-                        Modifier.fillMaxWidth().weight(1f).nestedScroll(nested),
-                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 88.dp)
-                    ) {
-                        if (dayList.isEmpty()) {
-                            item { Text("Нет событий", color = c.sub, modifier = Modifier.padding(vertical = 8.dp)) }
-                        }
-                        items(dayList, key = { it.id }) { l -> LessonCard(l, null) { onOpen(l, selected) } }
-                    }
+                    DayEventsPager(
+                        selected = selected, lessons = lessons, anchor = today, nested = nested,
+                        onSelect = onSelect, onOpen = onOpen,
+                        modifier = Modifier.fillMaxWidth().weight(1f)
+                    )
                 }
             }
         }
