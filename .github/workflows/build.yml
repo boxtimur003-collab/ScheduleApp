@@ -1,12 +1,26 @@
 name: Build APK
+
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - 'version.json'
   workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Сборки идут строго по очереди: иначе две параллельные сборки без кэша создали бы разные ключи
+concurrency:
+  group: build-release
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      VERSION_CODE: ${{ github.run_number }}
+      VERSION_NAME: "1.${{ github.run_number }}"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,23 +46,75 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0"
 
-      - name: Сборка assembleDebug
+      - name: Keystore из кэша
+        id: ks
+        uses: actions/cache/restore@v4
+        with:
+          path: release.keystore
+          key: release-keystore-v1
+
+      - name: Генерация keystore (в кэше его нет)
+        if: steps.ks.outputs.cache-hit != 'true'
+        run: |
+          keytool -genkeypair -keystore release.keystore -storetype PKCS12 \
+            -alias android -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname 'CN=Schedule, OU=App, O=Schedule, C=RU'
+
+      - name: Сохранить keystore в кэш
+        if: steps.ks.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: release.keystore
+          key: release-keystore-v1
+
+      - name: Проверка keystore
+        run: |
+          keytool -list -keystore release.keystore -storepass android -alias android > /dev/null
+
+      - name: Сборка assembleRelease
+        env:
+          KEYSTORE_FILE: release.keystore
+          KEYSTORE_PASSWORD: android
+          KEY_ALIAS: android
+          KEY_PASSWORD: android
         run: |
           if [ -f ./gradlew ]; then
             chmod +x ./gradlew
-            ./gradlew assembleDebug --stacktrace
+            ./gradlew assembleRelease --stacktrace
           else
-            gradle assembleDebug --stacktrace
+            gradle assembleRelease --stacktrace
           fi
 
-      - name: Артефакт app-debug.apk
+      - name: Артефакт app-release.apk
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: app-release
+          path: app/build/outputs/apk/release/app-release.apk
 
-      - name: Артефакт wear-debug.apk
+      - name: Артефакт wear-release.apk
         uses: actions/upload-artifact@v4
         with:
-          name: wear-debug
-          path: wear/build/outputs/apk/debug/wear-debug.apk
+          name: wear-release
+          path: wear/build/outputs/apk/release/wear-release.apk
+
+      - name: GitHub Release (прямые ссылки на APK)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: Версия 1.${{ github.run_number }}
+          files: |
+            app/build/outputs/apk/release/app-release.apk
+            wear/build/outputs/apk/release/wear-release.apk
+
+      - name: Обновить version.json
+        env:
+          VC: ${{ github.run_number }}
+          APK_URL: "https://github.com/${{ github.repository }}/releases/download/v${{ github.run_number }}/app-release.apk"
+        run: |
+          printf '{\n  "versionCode": %s,\n  "versionName": "1.%s",\n  "apkUrl": "%s"\n}\n' "$VC" "$VC" "$APK_URL" > version.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add version.json
+          git commit -m "version.json: v$VC" || exit 0
+          git push

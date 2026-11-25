@@ -83,6 +83,7 @@ class DataSyncService : WearableListenerService() {
                 }
                 "/file" -> FileStore.upsert(applicationContext, body)
                 "/file_delete" -> FileStore.delete(applicationContext, body.trim())
+                "/update" -> UpdateNotifier.show(applicationContext, body)
             }
         } catch (e: Exception) {
             // повреждённые данные игнорируем, на часах остаётся прежнее состояние

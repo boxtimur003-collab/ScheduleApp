@@ -4,3 +4,7 @@ build/
 */build/
 .idea/
 *.iml
+release.keystore
+*.keystore
+keystore.base64.txt
+.sign_block.tmp

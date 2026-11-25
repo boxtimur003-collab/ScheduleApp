@@ -23,6 +23,11 @@ object DataSyncService {
 
     suspend fun sendFileDelete(ctx: Context, id: String): Int = sendTo(ctx, FILE_DELETE_PATH, id)
 
+    const val UPDATE_PATH = "/update"
+
+    /** Информация об обновлении для часов: {"versionCode": N, "versionName": "..."}. */
+    suspend fun sendUpdate(ctx: Context, json: String): Int = sendTo(ctx, UPDATE_PATH, json)
+
     private suspend fun sendTo(ctx: Context, path: String, payload: String): Int = try {
         val bytes = payload.toByteArray(Charsets.UTF_8)
         if (bytes.size > MAX_BYTES) {

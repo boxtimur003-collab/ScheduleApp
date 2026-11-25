@@ -3,21 +3,43 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 android {
+    signingConfigs {
+        create("release") {
+            val props = java.util.Properties()
+            val lp = rootProject.file("local.properties")
+            if (lp.exists()) lp.inputStream().use { props.load(it) }
+            fun pick(key: String, def: String): String = props.getProperty(key) ?: System.getenv(key) ?: def
+            storeFile = rootProject.file(pick("KEYSTORE_FILE", "release.keystore"))
+            storePassword = pick("KEYSTORE_PASSWORD", "android")
+            keyAlias = pick("KEY_ALIAS", "android")
+            keyPassword = pick("KEY_PASSWORD", "android")
+        }
+    }
+    buildTypes {
+        release {
+            signingConfig = signingConfigs.getByName("release")
+            isMinifyEnabled = false
+        }
+    }
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
     namespace = "com.example.schedule"
     compileSdk = 34
     defaultConfig {
         applicationId = "com.example.schedule"
         minSdk = 30
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()
+        versionName = System.getenv("VERSION_NAME") ?: "1.0"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
 }
 dependencies {

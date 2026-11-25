@@ -178,6 +178,7 @@ fun App(repo: ScheduleRepository) {
     var showSend by remember { mutableStateOf(false) }
     var showFiles by remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
+    UpdateEffect()
 
     fun sync(list: List<Lesson>, notify: Boolean) {
         scope.launch {
