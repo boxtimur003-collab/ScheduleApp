@@ -53,6 +53,7 @@ fun initialOverlay(ctx: Context): Overlay {
 
 private val WF_PURPLE = 0xFF7C5CFF.toInt()
 private val WF_LILAC = 0xFFA78BFA.toInt()
+private val WF_GREEN = 0xFF4CC36B.toInt()
 private val WF_DIM = 0xFFB8B2D6.toInt()
 private val WF_SOFT = 0xFFE6E0FF.toInt()
 private val WF_CARD = 0xFF17161F.toInt()
@@ -94,6 +95,9 @@ private class ScheduleRenderer(
     }
 
     private class Hit(val r: RectF, val target: String)
+
+    /** current - идёт сейчас; next - ближайшее после него; between - перерыв между занятиями. */
+    private class Status(val current: Lesson?, val next: Lesson?, val between: Boolean)
 
     private val prefs: SharedPreferences = ctx.getSharedPreferences("schedule", Context.MODE_PRIVATE)
 
@@ -227,16 +231,48 @@ private class ScheduleRenderer(
         }
     }
 
+    // ---------------- логика «сейчас / следующее» ----------------
+    private fun status(all: List<Lesson>, nowMin: Int): Status {
+        val timed = all.filter { !it.isAllDay }.sortedBy { hm(it.start) }
+        val cur = timed.firstOrNull { hm(it.start) <= nowMin && nowMin < hm(it.end) }
+        val nxt = timed.firstOrNull { it !== cur && hm(it.start) > nowMin }
+        val past = timed.any { hm(it.end) <= nowMin }
+        return Status(cur, nxt, cur == null && nxt != null && past)
+    }
+
+    /** Сколько минут (с округлением вверх) осталось до момента target (в минутах от полуночи). */
+    private fun minsUntil(target: Int, nowMin: Int, sec: Int): Int =
+        (((target - nowMin) * 60 - sec) + 59) / 60
+
+    private fun dur(m: Int): String {
+        val v = if (m < 1) 1 else m
+        return if (v < 60) {
+            "$v мин"
+        } else {
+            val h = v / 60
+            val r = v % 60
+            if (r == 0) "$h ч" else "$h ч $r мин"
+        }
+    }
+
     // ---------------- ambient ----------------
     private fun drawAmbient(c: Canvas, s: Float, t: ZonedDateTime) {
-        val day = lessons.count { it.occursOn(t.toLocalDate()) }
+        val nowMin = t.hour * 60 + t.minute
+        val st = status(lessons.filter { it.occursOn(t.toLocalDate()) }, nowMin)
         txt(c, "%02d:%02d".format(t.hour, t.minute), s / 2f, s * 0.56f, s * 0.26f, 0xFFD0D0D0.toInt(), normalFace, Paint.Align.CENTER)
         txt(
             c, t.format(dateFmt).replaceFirstChar { it.uppercase() },
             s / 2f, s * 0.67f, s * 0.06f, 0xFF808080.toInt(), normalFace, Paint.Align.CENTER
         )
-        if (day > 0) {
-            txt(c, "$day ${lw(day)}", s / 2f, s * 0.76f, s * 0.045f, 0xFF606060.toInt(), normalFace, Paint.Align.CENTER)
+        val cur = st.current
+        val nxt = st.next
+        val line = when {
+            cur != null -> "Сейчас: " + cur.title
+            nxt != null -> nxt.title + " через " + dur(minsUntil(hm(nxt.start), nowMin, 0))
+            else -> ""
+        }
+        if (line.isNotEmpty()) {
+            txt(c, line, s / 2f, s * 0.76f, s * 0.045f, 0xFF707070.toInt(), normalFace, Paint.Align.CENTER, maxW = s * 0.78f)
         }
     }
 
@@ -245,8 +281,7 @@ private class ScheduleRenderer(
         val nowMin = t.hour * 60 + t.minute
         val today = t.toLocalDate()
         val all = lessons.filter { it.occursOn(today) }
-            .sortedWith(compareByDescending<Lesson> { it.isAllDay }.thenBy { it.start })
-        val upcoming = all.filter { it.isAllDay || hm(it.end) > nowMin }
+        val st = status(all, nowMin)
 
         // свечение справа сверху
         p.reset(); p.isAntiAlias = true
@@ -320,20 +355,8 @@ private class ScheduleRenderer(
         txt(c, pillTxt, pl + s * 0.055f, s * 0.407f, s * 0.045f, WF_SOFT, normalFace)
         hits.add(Hit(pillRect, "app"))
 
-        // карточки ближайших уроков (нижняя часть обрезается круглой рамкой)
-        val cardH = s * 0.15f
-        val gap = s * 0.015f
-        var top = s * 0.45f
-        for (l in upcoming.take(3)) {
-            drawCard(c, s, l, top, cardH)
-            top += cardH + gap
-        }
-        if (upcoming.isEmpty()) {
-            txt(
-                c, if (all.isEmpty()) "Занятий нет" else "На сегодня всё",
-                s / 2f, s * 0.62f, s * 0.05f, WF_DIM, normalFace, Paint.Align.CENTER
-            )
-        }
+        // что сейчас и что дальше
+        drawStatus(c, s, st, nowMin, t.second, all.isEmpty())
 
         // стрелки: слева «Файлы», справа «Даты»
         drawArrow(c, s, s * 0.075f, s * 0.52f, -1)
@@ -349,13 +372,62 @@ private class ScheduleRenderer(
         c.drawCircle(s * 0.53f, s * 0.955f, s * 0.010f, p)
     }
 
+    private fun drawStatus(c: Canvas, s: Float, st: Status, nowMin: Int, sec: Int, noLessons: Boolean) {
+        val cur = st.current
+        val nxt = st.next
+        val cardH = s * 0.145f
+        val top1 = s * 0.478f
+        val top2 = s * 0.678f
+        when {
+            cur != null -> {
+                val left = dur(minsUntil(hm(cur.end), nowMin, sec))
+                header(c, s, s * 0.468f, "СЕЙЧАС", WF_GREEN, "ещё $left")
+                drawCard(c, s, cur, top1, cardH)
+                if (nxt != null) {
+                    val gap = dur(minsUntil(hm(nxt.start), nowMin, sec))
+                    header(c, s, s * 0.668f, "СЛЕДУЮЩИЙ", WF_LILAC, "через $gap")
+                    drawCard(c, s, nxt, top2, cardH)
+                } else {
+                    txt(c, "Дальше занятий нет", s / 2f, s * 0.77f, s * 0.048f, WF_DIM, normalFace, Paint.Align.CENTER, maxW = s * 0.7f)
+                }
+            }
+            nxt != null -> {
+                header(c, s, s * 0.468f, "СЛЕДУЮЩЕЕ", WF_LILAC, "")
+                drawCard(c, s, nxt, top1, cardH)
+                val gap = dur(minsUntil(hm(nxt.start), nowMin, sec))
+                txt(c, "через $gap", s / 2f, s * 0.745f, s * 0.085f, Color.WHITE, boldFace, Paint.Align.CENTER, maxW = s * 0.7f)
+                txt(
+                    c, if (st.between) "идёт перерыв" else "занятия ещё не начались",
+                    s / 2f, s * 0.805f, s * 0.04f, WF_DIM, normalFace, Paint.Align.CENTER
+                )
+            }
+            else -> {
+                txt(
+                    c, if (noLessons) "Сегодня занятий нет" else "Занятия закончились",
+                    s / 2f, s * 0.64f, s * 0.058f, Color.WHITE, boldFace, Paint.Align.CENTER, maxW = s * 0.7f
+                )
+            }
+        }
+    }
+
+    private fun header(c: Canvas, s: Float, y: Float, label: String, color: Int, right: String) {
+        val left = s * 0.16f
+        val rightX = s * 0.84f
+        val rw = if (right.isNotEmpty()) measure(right, s * 0.04f, boldFace) else 0f
+        txt(c, label, left, y, s * 0.034f, color, boldFace, maxW = (rightX - left) - rw - s * 0.02f)
+        if (right.isNotEmpty()) {
+            txt(c, right, rightX, y, s * 0.04f, Color.WHITE, boldFace, Paint.Align.RIGHT)
+        }
+    }
+
     private fun drawCard(c: Canvas, s: Float, l: Lesson, top: Float, h: Float) {
         val cy = top + h / 2f
         val dy = abs(cy - s / 2f)
         val half = sqrt(maxOf(0f, (s / 2f) * (s / 2f) - dy * dy))
         val pad = s * 0.035f
-        val left = s / 2f - half + pad
-        val right = s / 2f + half - pad
+        // карточки не заходят под кнопки-стрелки по бокам
+        val left = maxOf(s / 2f - half + pad, s * 0.15f)
+        val right = minOf(s / 2f + half - pad, s * 0.85f)
         val rect = RectF(left, top, right, top + h)
         val col = colorInt(l.color)
 
