@@ -13,7 +13,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -130,8 +132,18 @@ fun MyFilesHost(onClose: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var files by remember { mutableStateOf(SentStore.load(ctx)) }
+    var choosing by remember { mutableStateOf<SentFile?>(null) }
+    var viewing by remember { mutableStateOf<SentFile?>(null) }
     var editing by remember { mutableStateOf<SentFile?>(null) }
-    BackHandler { if (editing != null) editing = null else onClose() }
+    BackHandler {
+        if (editing != null) {
+            editing = null
+        } else if (viewing != null) {
+            viewing = null
+        } else {
+            onClose()
+        }
+    }
 
     fun toast(r: Int) {
         val msg = when {
@@ -142,9 +154,11 @@ fun MyFilesHost(onClose: () -> Unit) {
         Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
     }
 
-    val cur = editing
+    val ed = editing
+    val vw = viewing
     Column(Modifier.fillMaxSize().background(c.bg).pointerInput(Unit) {}) {
-        if (cur == null) {
+        if (ed == null && vw == null) {
+            // ---------- список ----------
             Row(
                 Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -162,7 +176,7 @@ fun MyFilesHost(onClose: () -> Unit) {
                 items(files.reversed(), key = { it.id }) { f ->
                     Row(
                         Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(12.dp))
-                            .background(c.card).clickable { editing = f }.padding(start = 14.dp),
+                            .background(c.card).clickable { choosing = f }.padding(start = 14.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(Modifier.weight(1f).padding(vertical = 10.dp)) {
@@ -181,22 +195,44 @@ fun MyFilesHost(onClose: () -> Unit) {
                     }
                 }
             }
-        } else {
-            var text by remember(cur.id) { mutableStateOf(cur.text) }
+        } else if (vw != null) {
+            // ---------- просмотр (формулы отрисованы) ----------
+            Row(
+                Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = { viewing = null }) { Icon(Icons.Filled.ArrowBack, null, tint = c.text) }
+                Text(
+                    vw.name, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = c.text,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = { editing = vw; viewing = null }) {
+                    Icon(Icons.Filled.Edit, null, tint = c.accent)
+                }
+            }
+            Column(
+                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp)
+            ) {
+                MxFormulaText(vw.text, 20f, c.text, Modifier.fillMaxWidth())
+                Spacer(Modifier.height(32.dp))
+            }
+        } else if (ed != null) {
+            // ---------- редактирование (обычный текст) ----------
+            var text by remember(ed.id) { mutableStateOf(ed.text) }
             Row(
                 Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = { editing = null }) { Icon(Icons.Filled.Close, null, tint = c.text) }
                 Text(
-                    cur.name, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = c.text,
+                    ed.name, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = c.text,
                     modifier = Modifier.weight(1f)
                 )
                 IconButton(onClick = {
-                    SentStore.delete(ctx, cur.id)
+                    SentStore.delete(ctx, ed.id)
                     files = SentStore.load(ctx)
                     editing = null
-                    scope.launch { DataSyncService.sendFileDelete(ctx, cur.id) }
+                    scope.launch { DataSyncService.sendFileDelete(ctx, ed.id) }
                 }) { Icon(Icons.Filled.Delete, null, tint = Color(0xFFE53935)) }
             }
             OutlinedTextField(
@@ -212,7 +248,7 @@ fun MyFilesHost(onClose: () -> Unit) {
                 TextButton(onClick = {
                     if (text.isNotBlank()) {
                         val time = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm"))
-                        val saved = SentStore.upsert(ctx, cur.id, cur.name, text, time)
+                        val saved = SentStore.upsert(ctx, ed.id, ed.name, text, time)
                         files = SentStore.load(ctx)
                         editing = null
                         scope.launch { toast(DataSyncService.sendFile(ctx, SentStore.toJson(saved))) }
@@ -220,5 +256,25 @@ fun MyFilesHost(onClose: () -> Unit) {
                 }) { Text("Сохранить и отправить", fontSize = 16.sp, fontWeight = FontWeight.Bold) }
             }
         }
+    }
+
+    choosing?.let { f ->
+        AlertDialog(
+            onDismissRequest = { choosing = null },
+            title = { Text(f.name) },
+            text = {
+                Text(
+                    f.text.lineSequence().firstOrNull().orEmpty(),
+                    maxLines = 2, overflow = TextOverflow.Ellipsis
+                )
+            },
+            confirmButton = {
+                Column(horizontalAlignment = Alignment.End) {
+                    TextButton(onClick = { viewing = f; choosing = null }) { Text("Смотреть") }
+                    TextButton(onClick = { editing = f; choosing = null }) { Text("Редактировать") }
+                    TextButton(onClick = { choosing = null }) { Text("Отмена") }
+                }
+            }
+        )
     }
 }

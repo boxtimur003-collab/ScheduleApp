@@ -29,10 +29,13 @@ import androidx.wear.watchface.WatchFaceService
 import androidx.wear.watchface.WatchFaceType
 import androidx.wear.watchface.WatchState
 import androidx.wear.watchface.style.CurrentUserStyleRepository
+import org.json.JSONArray
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 /** С какого экрана открыть приложение: циферблат передаёт extra "open" = files | dates. */
@@ -63,6 +66,8 @@ private val WF_BTN = 0xFF1B1A22.toInt()
 private val WF_DOT = 0xFF3A3A44.toInt()
 private val WF_COLON = 0xFF8C88A8.toInt()
 
+private class PinnedFile(val id: String, val name: String, val text: String)
+
 class ScheduleWatchFaceService : WatchFaceService() {
     override suspend fun createWatchFace(
         surfaceHolder: SurfaceHolder,
@@ -88,7 +93,7 @@ private class ScheduleRenderer(
     watchState: WatchState
 ) : Renderer.CanvasRenderer2<ScheduleRenderer.Assets>(
     surfaceHolder, currentUserStyleRepository, watchState,
-    CanvasType.HARDWARE, 1000L, false
+    CanvasType.HARDWARE, 100L, false
 ) {
     class Assets : Renderer.SharedAssets {
         override fun onDestroy() {}
@@ -100,14 +105,29 @@ private class ScheduleRenderer(
     private class Status(val current: Lesson?, val next: Lesson?, val between: Boolean)
 
     private val prefs: SharedPreferences = ctx.getSharedPreferences("schedule", Context.MODE_PRIVATE)
+    private val filePrefs: SharedPreferences = ctx.getSharedPreferences("files", Context.MODE_PRIVATE)
 
     @Volatile
     private var lessons: List<Lesson> = loadLessons()
 
-    // слушатель хранится в поле: SharedPreferences держит его только слабой ссылкой
+    @Volatile
+    private var pinned: PinnedFile? = loadPinned()
+
+    private var pinKey = ""
+    private var pinPages: List<List<MxLine>> = emptyList()
+    private var pinPage = 0
+
+    // слушатели хранятся в полях: SharedPreferences держит их только слабой ссылкой
     private val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == "json") {
             lessons = loadLessons()
+            invalidate()
+        }
+    }
+    private val fileListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == "json" || key == "pinned") {
+            pinned = loadPinned()
+            pinKey = ""
             invalidate()
         }
     }
@@ -123,10 +143,29 @@ private class ScheduleRenderer(
 
     init {
         prefs.registerOnSharedPreferenceChangeListener(listener)
+        filePrefs.registerOnSharedPreferenceChangeListener(fileListener)
     }
 
     private fun loadLessons(): List<Lesson> =
         LessonJson.fromJson(prefs.getString("json", "[]") ?: "[]")
+
+    private fun loadPinned(): PinnedFile? {
+        val id = filePrefs.getString("pinned", null) ?: return null
+        return try {
+            val a = JSONArray(filePrefs.getString("json", "[]") ?: "[]")
+            var res: PinnedFile? = null
+            for (k in 0 until a.length()) {
+                val o = a.getJSONObject(k)
+                if (o.optString("id") == id) {
+                    res = PinnedFile(id, o.optString("name", "Файл"), o.optString("text", ""))
+                    break
+                }
+            }
+            res
+        } catch (e: Exception) {
+            null
+        }
+    }
 
     override suspend fun createSharedAssets(): Assets = Assets()
 
@@ -138,7 +177,9 @@ private class ScheduleRenderer(
         canvas.drawColor(Color.BLACK)
         canvas.save()
         canvas.translate(originX, originY)
+        val pf = pinned
         if (renderParameters.drawMode == DrawMode.AMBIENT) drawAmbient(canvas, s, zonedDateTime)
+        else if (pf != null) drawPinned(canvas, s, zonedDateTime, pf)
         else drawInteractive(canvas, s, zonedDateTime)
         canvas.restore()
     }
@@ -152,7 +193,18 @@ private class ScheduleRenderer(
         val lx = x - originX
         val ly = y - originY
         val target = hits.firstOrNull { it.r.contains(lx, ly) }?.target ?: "app"
-        open(target)
+        when (target) {
+            "unpin" -> filePrefs.edit().remove("pinned").apply()
+            "next" -> {
+                if (pinPage < pinPages.size - 1) pinPage++
+                invalidate()
+            }
+            "prev" -> {
+                if (pinPage > 0) pinPage--
+                invalidate()
+            }
+            else -> open(target)
+        }
     }
 
     private fun open(target: String) {
@@ -255,6 +307,27 @@ private class ScheduleRenderer(
         }
     }
 
+    // ---------------- бегущая линия по кругу вместо секундной стрелки ----------------
+    private fun drawRing(c: Canvas, s: Float, t: ZonedDateTime) {
+        val sw = s * 0.012f
+        val inset = sw / 2f + s * 0.008f
+        val oval = RectF(inset, inset, s - inset, s - inset)
+        stroke(WF_RING, sw)
+        c.drawOval(oval, p)
+        val frac = (t.second + t.nano / 1_000_000_000f) / 60f
+        val sweep = 360f * frac
+        if (sweep > 0.5f) {
+            stroke(WF_PURPLE, sw)
+            c.drawArc(oval, 270f, sweep, false, p)
+        }
+        val rr = (s - 2f * inset) / 2f
+        val ang = Math.toRadians((270f + sweep).toDouble())
+        val hx = s / 2f + rr * cos(ang).toFloat()
+        val hy = s / 2f + rr * sin(ang).toFloat()
+        fill(Color.WHITE)
+        c.drawCircle(hx, hy, sw * 0.9f, p)
+    }
+
     // ---------------- ambient ----------------
     private fun drawAmbient(c: Canvas, s: Float, t: ZonedDateTime) {
         val nowMin = t.hour * 60 + t.minute
@@ -276,6 +349,88 @@ private class ScheduleRenderer(
         }
     }
 
+    // ---------------- закреплённый файл ----------------
+    private fun ensurePages(pf: PinnedFile, s: Float, aw: Float, ah: Float) {
+        val key = pf.id + "|" + pf.text.hashCode() + "|" + s.toInt()
+        if (key == pinKey) return
+        pinKey = key
+        pinPage = 0
+        val lines = try {
+            mxLayout(pf.text, s * 0.048f, aw, Color.WHITE)
+        } catch (e: Throwable) {
+            emptyList()
+        }
+        val pages = ArrayList<List<MxLine>>()
+        var cur = ArrayList<MxLine>()
+        var h = 0f
+        for (l in lines) {
+            if (cur.isEmpty() && l.w <= 0f) continue
+            if (cur.isNotEmpty() && h + l.h > ah) {
+                pages.add(cur)
+                cur = ArrayList()
+                h = 0f
+            }
+            cur.add(l)
+            h += l.h
+        }
+        if (cur.isNotEmpty()) pages.add(cur)
+        pinPages = pages
+    }
+
+    private fun drawPinned(c: Canvas, s: Float, t: ZonedDateTime, pf: PinnedFile) {
+        drawRing(c, s, t)
+
+        // кнопка «Открепить»
+        val btn = RectF(s * 0.31f, s * 0.04f, s * 0.69f, s * 0.112f)
+        fill(WF_PILL)
+        c.drawRoundRect(btn, s * 0.036f, s * 0.036f, p)
+        stroke(WF_PURPLE, s * 0.004f)
+        c.drawRoundRect(btn, s * 0.036f, s * 0.036f, p)
+        txt(c, "×  Открепить", s / 2f, s * 0.091f, s * 0.042f, WF_SOFT, boldFace, Paint.Align.CENTER)
+        hits.add(Hit(RectF(s * 0.25f, 0f, s * 0.75f, s * 0.14f), "unpin"))
+
+        // время
+        txt(c, "%02d:%02d".format(t.hour, t.minute), s / 2f, s * 0.178f, s * 0.062f, WF_SOFT, boldFace, Paint.Align.CENTER)
+
+        // содержимое файла
+        val ax = s * 0.15f
+        val ay = s * 0.205f
+        val aw = s * 0.70f
+        val ah = s * 0.635f
+        ensurePages(pf, s, aw, ah)
+        val pages = pinPages
+        if (pages.isEmpty()) {
+            txt(c, "Не удалось показать файл", s / 2f, s * 0.5f, s * 0.045f, WF_DIM, normalFace, Paint.Align.CENTER, maxW = aw)
+            hits.add(Hit(RectF(0f, ay, s, s * 0.9f), "app"))
+            return
+        }
+        if (pinPage > pages.size - 1) pinPage = pages.size - 1
+        c.save()
+        c.clipRect(ax - s * 0.02f, ay, ax + aw + s * 0.02f, ay + ah + s * 0.02f)
+        var y = ay
+        for (l in pages[pinPage]) {
+            c.save()
+            c.translate(ax, y)
+            l.draw(c)
+            c.restore()
+            y += l.h
+        }
+        c.restore()
+
+        if (pages.size > 1) {
+            hits.add(Hit(RectF(0f, ay, s, ay + ah * 0.45f), "prev"))
+            hits.add(Hit(RectF(0f, ay + ah * 0.45f, s, s * 0.90f), "next"))
+            val n = minOf(pages.size, 7)
+            val startX = s / 2f - (n - 1) * s * 0.015f
+            for (k in 0 until n) {
+                fill(if (k == pinPage) WF_PURPLE else WF_DOT)
+                c.drawCircle(startX + k * s * 0.03f, s * 0.955f, if (k == pinPage) s * 0.012f else s * 0.009f, p)
+            }
+        } else {
+            hits.add(Hit(RectF(0f, ay, s, s * 0.9f), "app"))
+        }
+    }
+
     // ---------------- интерактивный режим ----------------
     private fun drawInteractive(c: Canvas, s: Float, t: ZonedDateTime) {
         val nowMin = t.hour * 60 + t.minute
@@ -288,17 +443,7 @@ private class ScheduleRenderer(
         p.shader = RadialGradient(s * 0.78f, s * 0.36f, s * 0.36f, 0x557C5CFF, 0x00000000, Shader.TileMode.CLAMP)
         c.drawCircle(s * 0.78f, s * 0.36f, s * 0.36f, p)
 
-        // дуга прогресса учебного дня (08:00-18:00) по левому краю
-        val sw = s * 0.012f
-        val inset = sw / 2f + s * 0.008f
-        val oval = RectF(inset, inset, s - inset, s - inset)
-        stroke(WF_RING, sw)
-        c.drawArc(oval, 100f, 170f, false, p)
-        val prog = ((nowMin - 480) / 600f).coerceIn(0f, 1f)
-        if (prog > 0f) {
-            stroke(WF_PURPLE, sw)
-            c.drawArc(oval, 270f - 170f * prog, 170f * prog, false, p)
-        }
+        drawRing(c, s, t)
 
         // иконка календаря и дата
         fill(WF_LILAC)
